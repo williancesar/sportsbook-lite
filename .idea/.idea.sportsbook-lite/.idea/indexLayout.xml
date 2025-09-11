@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="UserContentModel">
+    <attachedFolders>
+      <Path>docker</Path>
+      <Path>docs</Path>
+      <Path>iac</Path>
+      <Path>scripts</Path>
+      <Path>src</Path>
+      <Path>tests</Path>
+    </attachedFolders>
+    <explicitIncludes />
+    <explicitExcludes />
+  </component>
+</project>
