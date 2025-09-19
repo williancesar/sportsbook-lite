@@ -1,0 +1,10 @@
+global using Microsoft.Extensions.Logging;
+global using Orleans;
+global using Orleans.Concurrency;
+global using Orleans.Runtime;
+global using Orleans.Serialization;
+global using SportsbookLite.Contracts.Betting;
+global using SportsbookLite.Contracts.Events;
+global using SportsbookLite.Contracts.Wallet;
+global using SportsbookLite.GrainInterfaces;
+global using SportsbookLite.Infrastructure.EventStore;

@@ -1,0 +1,9 @@
+global using Dapper;
+global using Microsoft.Extensions.Configuration;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.Logging;
+global using Npgsql;
+global using Orleans.Serialization;
+global using Pulsar.Client.Api;
+global using StackExchange.Redis;
+global using System.Data;

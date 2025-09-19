@@ -1,0 +1,201 @@
+groups:
+  - name: loki.rules
+    rules:
+    # Loki availability alerts
+    - alert: LokiDown
+      expr: up{job="loki"} == 0
+      for: 1m
+      labels:
+        severity: critical
+        component: logging
+      annotations:
+        summary: "Loki is down"
+        description: "Loki service {{ $labels.instance }} has been down for more than 1 minute"
+        runbook_url: "https://grafana.com/docs/loki/latest/operations/troubleshooting/"
+
+    - alert: LokiHighIngestionRate
+      expr: rate(loki_ingester_samples_received_total[5m]) > 5000
+      for: 10m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "High Loki log ingestion rate"
+        description: "Loki is ingesting {{ $value }} samples per second, which is above the expected threshold"
+
+    - alert: LokiIngestionStopped
+      expr: rate(loki_ingester_chunks_created_total[10m]) == 0
+      for: 5m
+      labels:
+        severity: critical
+        component: logging
+      annotations:
+        summary: "Loki log ingestion has stopped"
+        description: "Loki has not created any new chunks in the last 10 minutes"
+
+    # Loki performance alerts
+    - alert: LokiHighQueryLatency
+      expr: histogram_quantile(0.95, rate(loki_request_duration_seconds_bucket{route="loki_api_v1_query_range"}[5m])) > 10
+      for: 5m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "High Loki query latency"
+        description: "95th percentile query latency is {{ $value }}s, which may impact dashboard performance"
+
+    - alert: LokiHighErrorRate
+      expr: |
+        (
+          sum(rate(loki_request_duration_seconds_count{status_code=~"5.."}[5m]))
+          /
+          sum(rate(loki_request_duration_seconds_count[5m]))
+        ) > 0.05
+      for: 5m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "High Loki error rate"
+        description: "Loki error rate is {{ $value | humanizePercentage }}, which may indicate issues with log ingestion or queries"
+
+    # Loki resource alerts
+    - alert: LokiHighMemoryUsage
+      expr: process_resident_memory_bytes{job="loki"} / 1024 / 1024 / 1024 > 1.5
+      for: 5m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "High Loki memory usage"
+        description: "Loki {{ $labels.instance }} is using {{ $value | humanize }}GB of memory"
+
+    - alert: LokiHighCPUUsage
+      expr: rate(process_cpu_seconds_total{job="loki"}[5m]) > 0.8
+      for: 10m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "High Loki CPU usage"
+        description: "Loki {{ $labels.instance }} CPU usage is {{ $value | humanizePercentage }}"
+
+  - name: promtail.rules
+    rules:
+    # Promtail availability alerts
+    - alert: PromtailDown
+      expr: up{job="promtail"} == 0
+      for: 2m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "Promtail is down"
+        description: "Promtail service {{ $labels.instance }} has been down for more than 2 minutes"
+
+    - alert: PromtailLogIngestionSlow
+      expr: rate(promtail_sent_entries_total[5m]) < 1
+      for: 10m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "Promtail log ingestion slow"
+        description: "Promtail {{ $labels.instance }} is sending less than 1 log entry per second"
+
+    - alert: PromtailTooManyTargets
+      expr: promtail_targets_active_total > 1000
+      for: 5m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "Too many Promtail targets"
+        description: "Promtail {{ $labels.instance }} has {{ $value }} active targets, which may impact performance"
+
+    # Promtail error alerts
+    - alert: PromtailHighErrorRate
+      expr: rate(promtail_sent_entries_total{status="failed"}[5m]) / rate(promtail_sent_entries_total[5m]) > 0.1
+      for: 5m
+      labels:
+        severity: critical
+        component: logging
+      annotations:
+        summary: "High Promtail error rate"
+        description: "Promtail {{ $labels.instance }} has a {{ $value | humanizePercentage }} error rate when sending logs"
+
+    - alert: PromtailFileAccessError
+      expr: increase(promtail_files_active_total{status="failed"}[5m]) > 0
+      for: 1m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "Promtail file access errors"
+        description: "Promtail {{ $labels.instance }} is having trouble accessing {{ $value }} log files"
+
+  - name: logging-integration.rules
+    rules:
+    # Integration health alerts
+    - alert: LogVolumeDropped
+      expr: |
+        (
+          rate(loki_ingester_samples_received_total[10m]) offset 1h
+          -
+          rate(loki_ingester_samples_received_total[10m])
+        ) / rate(loki_ingester_samples_received_total[10m]) offset 1h > 0.5
+      for: 5m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "Significant drop in log volume"
+        description: "Log ingestion volume has dropped by {{ $value | humanizePercentage }} compared to 1 hour ago"
+
+    - alert: NoLogsFromApplication
+      expr: |
+        (
+          sum(rate(loki_ingester_samples_received_total{job=~"orleans_silo|sportsbook_api"}[10m]))
+          by (job)
+        ) == 0
+      for: 15m
+      labels:
+        severity: critical
+        component: logging
+      annotations:
+        summary: "No logs from application"
+        description: "No logs received from {{ $labels.job }} for more than 15 minutes"
+
+    - alert: ExcessiveLogVolume
+      expr: rate(loki_ingester_samples_received_total[5m]) > 10000
+      for: 10m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "Excessive log volume"
+        description: "Log ingestion rate of {{ $value }} samples/sec is unusually high and may indicate an issue"
+
+    # Storage alerts
+    - alert: LokiStorageUsageHigh
+      expr: |
+        (
+          loki_ingester_chunks_stored_total * 1024 * 1024
+        ) > 8 * 1024 * 1024 * 1024  # 8GB
+      for: 5m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "High Loki storage usage"
+        description: "Loki storage usage is {{ $value | humanizeBytes }}"
+
+    - alert: LogRetentionIssue
+      expr: loki_ingester_chunks_flushed_total == 0
+      for: 30m
+      labels:
+        severity: warning
+        component: logging
+      annotations:
+        summary: "Log retention issue"
+        description: "Loki has not flushed any chunks in 30 minutes, old data may not be cleaned up"

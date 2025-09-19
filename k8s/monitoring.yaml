@@ -1,0 +1,315 @@
+---
+# ServiceMonitor for Orleans Silo metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: orleans-silo-monitor
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: orleans-silo
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: orleans-silo
+  endpoints:
+  - port: gateway
+    interval: 30s
+    path: /metrics
+    honorLabels: true
+
+---
+# ServiceMonitor for API metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sportsbook-api-monitor
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: sportsbook-api
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sportsbook-api
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+    honorLabels: true
+
+---
+# PrometheusRule for Orleans and API alerting
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: sportsbook-alerts
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: sportsbook-lite
+    app.kubernetes.io/component: alerting
+spec:
+  groups:
+  - name: sportsbook-orleans.rules
+    rules:
+    - alert: OrleansHighCPUUsage
+      expr: rate(process_cpu_seconds_total{job="orleans-silo-monitor"}[5m]) * 100 > 80
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Orleans Silo high CPU usage"
+        description: "Orleans Silo {{ $labels.pod }} has CPU usage above 80% for more than 5 minutes"
+    
+    - alert: OrleansHighMemoryUsage
+      expr: (process_resident_memory_bytes{job="orleans-silo-monitor"} / 1024 / 1024 / 1024) > 1.5
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Orleans Silo high memory usage"
+        description: "Orleans Silo {{ $labels.pod }} is using more than 1.5GB of memory"
+    
+    - alert: OrleansGrainActivationErrors
+      expr: increase(orleans_grains_activation_failed_total[5m]) > 10
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "High Orleans grain activation failures"
+        description: "Orleans has {{ $value }} grain activation failures in the last 5 minutes"
+    
+    - alert: OrleansClusterMembershipDown
+      expr: orleans_cluster_membership_active < 2
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Orleans cluster membership below minimum"
+        description: "Orleans cluster has only {{ $value }} active members, minimum required is 2"
+
+  - name: sportsbook-api.rules
+    rules:
+    - alert: APIHighErrorRate
+      expr: rate(http_requests_total{job="sportsbook-api-monitor",status=~"5.."}[5m]) / rate(http_requests_total{job="sportsbook-api-monitor"}[5m]) > 0.05
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High API error rate"
+        description: "API error rate is {{ $value | humanizePercentage }} for more than 5 minutes"
+    
+    - alert: APIHighLatency
+      expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="sportsbook-api-monitor"}[5m])) > 2
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High API latency"
+        description: "API 95th percentile latency is {{ $value }}s for more than 5 minutes"
+    
+    - alert: APIDown
+      expr: up{job="sportsbook-api-monitor"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "API is down"
+        description: "SportsbookLite API {{ $labels.instance }} is down"
+
+  - name: sportsbook-infrastructure.rules
+    rules:
+    - alert: PostgreSQLDown
+      expr: up{job="postgres"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "PostgreSQL is down"
+        description: "PostgreSQL database is not responding"
+    
+    - alert: RedisDown
+      expr: up{job="redis"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Redis is down"
+        description: "Redis cache is not responding"
+    
+    - alert: PulsarDown
+      expr: up{job="pulsar"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Pulsar is down"
+        description: "Pulsar message broker is not responding"
+
+  - name: sportsbook-logging.rules
+    rules:
+    - alert: LokiDown
+      expr: up{job="loki-monitor"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Loki is down"
+        description: "Loki log aggregation service is not responding"
+    
+    - alert: LokiHighIngestionRate
+      expr: rate(loki_ingester_samples_received_total[5m]) > 10000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High Loki ingestion rate"
+        description: "Loki is ingesting {{ $value }} samples/second for more than 5 minutes"
+    
+    - alert: LokiIngestionErrors
+      expr: rate(loki_ingester_chunks_created_total[5m]) == 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Loki ingestion stopped"
+        description: "Loki has not created any chunks in the last 5 minutes"
+    
+    - alert: LokiHighMemoryUsage
+      expr: (container_memory_usage_bytes{pod=~"loki-.*"} / container_spec_memory_limit_bytes) > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Loki high memory usage"
+        description: "Loki pod {{ $labels.pod }} is using {{ $value | humanizePercentage }} of its memory limit"
+    
+    - alert: LokiDiskSpaceUsage
+      expr: (kubelet_volume_stats_used_bytes{persistentvolumeclaim=~"storage-loki-.*"} / kubelet_volume_stats_capacity_bytes) > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Loki disk space usage high"
+        description: "Loki storage is {{ $value | humanizePercentage }} full"
+    
+    - alert: PromtailDown
+      expr: up{job="promtail-monitor"} == 0
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Promtail is down"
+        description: "Promtail {{ $labels.instance }} is not responding"
+    
+    - alert: PromtailLogIngestionSlow
+      expr: rate(promtail_sent_entries_total[5m]) < 10
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Promtail log ingestion slow"
+        description: "Promtail {{ $labels.instance }} is sending less than 10 entries/second"
+    
+    - alert: HighLogErrorRate
+      expr: |
+        (
+          sum(rate(loki_request_duration_seconds_count{status_code=~"5.."}[5m])) by (job)
+          /
+          sum(rate(loki_request_duration_seconds_count[5m])) by (job)
+        ) > 0.01
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High log error rate detected"
+        description: "{{ $labels.job }} has error rate of {{ $value | humanizePercentage }} for more than 5 minutes"
+
+---
+# Grafana Dashboard ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sportsbook-dashboard
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: sportsbook-lite
+    app.kubernetes.io/component: monitoring
+    grafana_dashboard: "1"
+data:
+  sportsbook-dashboard.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "SportsbookLite Dashboard",
+        "tags": ["sportsbook", "orleans", "api"],
+        "timezone": "UTC",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Orleans Cluster Status",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "orleans_cluster_membership_active",
+                "legendFormat": "Active Silos"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "color": {"mode": "thresholds"},
+                "thresholds": {
+                  "steps": [
+                    {"color": "red", "value": null},
+                    {"color": "yellow", "value": 2},
+                    {"color": "green", "value": 3}
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": 2,
+            "title": "API Request Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(http_requests_total{job=\"sportsbook-api-monitor\"}[5m])",
+                "legendFormat": "Requests/sec"
+              }
+            ]
+          },
+          {
+            "id": 3,
+            "title": "API Response Time",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{job=\"sportsbook-api-monitor\"}[5m]))",
+                "legendFormat": "50th percentile"
+              },
+              {
+                "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"sportsbook-api-monitor\"}[5m]))",
+                "legendFormat": "95th percentile"
+              }
+            ]
+          },
+          {
+            "id": 4,
+            "title": "Orleans Grain Activations",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(orleans_grains_activation_total[5m])",
+                "legendFormat": "Activations/sec"
+              }
+            ]
+          }
+        ],
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "refresh": "30s"
+      }
+    }

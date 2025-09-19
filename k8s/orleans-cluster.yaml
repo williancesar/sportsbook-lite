@@ -1,0 +1,317 @@
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: orleans-silo
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: orleans-silo
+    app.kubernetes.io/component: orleans-cluster
+    app.kubernetes.io/part-of: sportsbook-lite
+    orleans/clusterId: sportsbook-production
+    orleans/serviceId: sportsbook-silo
+spec:
+  serviceName: orleans-silo-service
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: orleans-silo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: orleans-silo
+        app.kubernetes.io/component: orleans-cluster
+        orleans/clusterId: sportsbook-production
+        orleans/serviceId: sportsbook-silo
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "30000"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: orleans-silo
+        image: sportsbook-lite/silo:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 11111
+          name: silo-comm
+          protocol: TCP
+        - containerPort: 30000
+          name: gateway
+          protocol: TCP
+        env:
+        # Orleans Configuration
+        - name: ORLEANS_SERVICE_ID
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: ORLEANS_SERVICE_ID
+        - name: ORLEANS_CLUSTER_ID
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: ORLEANS_CLUSTER_ID
+        - name: ORLEANS_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: ORLEANS_ENVIRONMENT
+        
+        # Database Connection
+        - name: ConnectionStrings__Database
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: DATABASE_CONNECTION_STRING
+        - name: ConnectionStrings__Redis
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: REDIS_CONNECTION_STRING
+        
+        # Pulsar Configuration
+        - name: Pulsar__ServiceUrl
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: PULSAR_SERVICE_URL
+        - name: Pulsar__AdminUrl
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: PULSAR_ADMIN_URL
+        
+        # General Configuration
+        - name: ASPNETCORE_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: ASPNETCORE_ENVIRONMENT
+        - name: Logging__LogLevel__Default
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: Logging__LogLevel__Default
+        - name: Logging__LogLevel__Orleans
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: Logging__LogLevel__Orleans
+        
+        # Health Checks
+        - name: HealthChecks__Enabled
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: HealthChecks__Enabled
+        - name: HealthChecks__Port
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: HealthChecks__Port
+        
+        # Pod-specific configuration
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        
+        volumeMounts:
+        - name: orleans-logs
+          mountPath: /app/logs
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 30000
+            scheme: HTTP
+          initialDelaySeconds: 90
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+          successThreshold: 1
+        
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 30000
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        
+        startupProbe:
+          httpGet:
+            path: /health/startup
+            port: 30000
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12  # Allow up to 2 minutes for startup
+          successThreshold: 1
+        
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+      
+      # Anti-affinity to spread pods across nodes for better availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - orleans-silo
+              topologyKey: kubernetes.io/hostname
+      
+      volumes:
+      - name: orleans-logs
+        emptyDir:
+          sizeLimit: 1Gi
+
+---
+# Headless service for Orleans Silo-to-Silo communication
+apiVersion: v1
+kind: Service
+metadata:
+  name: orleans-silo-service
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: orleans-silo
+    app.kubernetes.io/component: orleans-cluster
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+  - name: silo-comm
+    port: 11111
+    targetPort: 11111
+    protocol: TCP
+  - name: gateway
+    port: 30000
+    targetPort: 30000
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: orleans-silo
+
+---
+# Service for Orleans Gateway (for API clients)
+apiVersion: v1
+kind: Service
+metadata:
+  name: orleans-gateway-service
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: orleans-silo
+    app.kubernetes.io/component: orleans-gateway
+spec:
+  type: ClusterIP
+  ports:
+  - name: gateway
+    port: 30000
+    targetPort: 30000
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: orleans-silo
+
+---
+# Horizontal Pod Autoscaler for Orleans Cluster
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: orleans-silo-hpa
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: orleans-silo
+    app.kubernetes.io/component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: orleans-silo
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max
+
+---
+# Pod Disruption Budget to ensure availability during updates
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: orleans-silo-pdb
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: orleans-silo
+    app.kubernetes.io/component: availability
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: orleans-silo

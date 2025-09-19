@@ -1,0 +1,346 @@
+# Docker Compose for SportsbookLite local development environment
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: sportsbook-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sportsbook
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev123
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev -d sportsbook"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - sportsbook-network
+
+  # Redis for Orleans Clustering and Caching
+  redis:
+    image: redis:7-alpine
+    container_name: sportsbook-redis
+    restart: unless-stopped
+    command: redis-server --requirepass dev123 --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - sportsbook-network
+
+  # Apache Pulsar for Event Streaming
+  pulsar:
+    image: apachepulsar/pulsar:3.3.0
+    container_name: sportsbook-pulsar
+    restart: unless-stopped
+    command: bin/pulsar standalone
+    environment:
+      - PULSAR_MEM=-Xms1g -Xmx1g
+      - PULSAR_GC=-XX:+UseG1GC
+    volumes:
+      - pulsar_data:/pulsar/data
+      - pulsar_conf:/pulsar/conf
+    ports:
+      - "6650:6650"  # Pulsar protocol
+      - "8080:8080"  # HTTP admin
+    healthcheck:
+      test: ["CMD", "bin/pulsar-admin", "brokers", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - sportsbook-network
+
+  # Orleans Silo Host
+  orleans-silo:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: orleans-runtime
+    container_name: sportsbook-orleans
+    restart: unless-stopped
+    environment:
+      # Orleans Configuration
+      - ORLEANS_SERVICE_ID=sportsbook-silo
+      - ORLEANS_CLUSTER_ID=sportsbook-dev
+      - ORLEANS_ENVIRONMENT=Development
+      
+      # Database Connection
+      - ConnectionStrings__Database=Host=postgres;Port=5432;Database=sportsbook;Username=dev;Password=dev123;
+      - ConnectionStrings__Redis=redis:6379,password=dev123,abortConnect=false
+      
+      # Pulsar Configuration
+      - Pulsar__ServiceUrl=pulsar://pulsar:6650
+      - Pulsar__AdminUrl=http://pulsar:8080
+      
+      # Logging
+      - ASPNETCORE_ENVIRONMENT=Development
+      - Logging__LogLevel__Default=Information
+      - Logging__LogLevel__Orleans=Warning
+      - Logging__LogLevel__Microsoft=Warning
+      
+      # Health Checks
+      - HealthChecks__Enabled=true
+      - HealthChecks__Port=30000
+    ports:
+      - "11111:11111"  # Silo-to-Silo
+      - "30000:30000"  # Gateway
+      - "8081:8080"    # Orleans Dashboard
+    volumes:
+      - ./logs/orleans:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pulsar:
+        condition: service_healthy
+    # Health check disabled - Orleans is application-level service, not HTTP endpoint
+    # healthcheck:
+    #   test: ["CMD", "sh", "-c", "ss -tnl | grep ':30000' && echo 'Orleans gateway port is open' || exit 1"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 90s
+    networks:
+      - sportsbook-network
+
+  # FastEndpoints API
+  sportsbook-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: api-runtime
+    container_name: sportsbook-api
+    restart: unless-stopped
+    environment:
+      # API Configuration
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+      - DOTNET_RUNNING_IN_CONTAINER=true
+
+      # Orleans Client Configuration
+      - Orleans__ClusterId=sportsbook-dev
+      - Orleans__ServiceId=sportsbook-api
+      - Orleans__GatewayPort=30000
+      - Orleans__SiloAddress=orleans-silo
+      
+      # Database Connection
+      - ConnectionStrings__Database=Host=postgres;Port=5432;Database=sportsbook;Username=dev;Password=dev123;
+      - ConnectionStrings__Redis=redis:6379,password=dev123,abortConnect=false
+      
+      # Pulsar Configuration
+      - Pulsar__ServiceUrl=pulsar://pulsar:6650
+      - Pulsar__AdminUrl=http://pulsar:8080
+      
+      # Logging
+      - Logging__LogLevel__Default=Information
+      - Logging__LogLevel__Microsoft.AspNetCore=Warning
+      
+      # CORS for development
+      - CORS__AllowedOrigins__0=http://localhost:3000
+      - CORS__AllowedOrigins__1=http://localhost:5173
+    ports:
+      - "5000:8080"    # API endpoint
+    volumes:
+      - ./logs/api:/app/logs
+    depends_on:
+      orleans-silo:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - sportsbook-network
+
+  # Pulsar Manager (Optional - for development)
+  pulsar-manager:
+    image: apachepulsar/pulsar-manager:v0.3.0
+    container_name: sportsbook-pulsar-manager
+    restart: unless-stopped
+    environment:
+      - SPRING_CONFIGURATION_FILE=/pulsar-manager/pulsar-manager/application.properties
+    ports:
+      - "9527:9527"
+    depends_on:
+      - pulsar
+    networks:
+      - sportsbook-network
+    profiles:
+      - management
+
+  # Adminer for Database Management (Optional - for development)
+  adminer:
+    image: adminer:4.8.1
+    container_name: sportsbook-adminer
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+    depends_on:
+      - postgres
+    networks:
+      - sportsbook-network
+    profiles:
+      - management
+
+  # Redis Commander for Redis Management (Optional - for development)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: sportsbook-redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0:dev123
+    ports:
+      - "8083:8081"
+    depends_on:
+      - redis
+    networks:
+      - sportsbook-network
+    profiles:
+      - management
+
+  # Grafana Loki for log aggregation
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: sportsbook-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
+      - ./loki-config.yml:/etc/loki/local-config.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - sportsbook-network
+
+  # Promtail for log collection
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: sportsbook-promtail
+    restart: unless-stopped
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./logs/orleans:/app/logs/orleans:ro
+      - ./logs/api:/app/logs/api:ro
+      - promtail_positions:/tmp
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      loki:
+        condition: service_healthy
+    networks:
+      - sportsbook-network
+
+  # Grafana for dashboards and visualization
+  grafana:
+    image: grafana/grafana-oss:10.2.0
+    container_name: sportsbook-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-worldmap-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - loki
+      - prometheus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - sportsbook-network
+    profiles:
+      - monitoring
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: sportsbook-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - prometheus_data:/prometheus
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - sportsbook-network
+    profiles:
+      - monitoring
+
+# Persistent volumes for data storage
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pulsar_data:
+    driver: local
+  pulsar_conf:
+    driver: local
+  loki_data:
+    driver: local
+  promtail_positions:
+    driver: local
+  grafana_data:
+    driver: local
+  prometheus_data:
+    driver: local
+
+# Network for service communication
+networks:
+  sportsbook-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

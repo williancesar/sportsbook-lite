@@ -1,0 +1,112 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sportsbook-config
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: sportsbook-lite
+    app.kubernetes.io/component: configuration
+data:
+  # Orleans Configuration
+  ORLEANS_SERVICE_ID: "sportsbook-silo"
+  ORLEANS_CLUSTER_ID: "sportsbook-production"
+  ORLEANS_ENVIRONMENT: "Production"
+  
+  # Pulsar Configuration
+  PULSAR_SERVICE_URL: "pulsar://pulsar-service:6650"
+  PULSAR_ADMIN_URL: "http://pulsar-service:8080"
+  
+  # Logging Configuration
+  ASPNETCORE_ENVIRONMENT: "Production"
+  Logging__LogLevel__Default: "Information"
+  Logging__LogLevel__Orleans: "Warning"
+  Logging__LogLevel__Microsoft: "Warning"
+  
+  # Health Checks
+  HealthChecks__Enabled: "true"
+  HealthChecks__Port: "30000"
+  
+  # CORS Configuration (for API)
+  CORS__AllowCredentials: "false"
+  
+  # Orleans Dashboard (disabled in production)
+  Orleans__Dashboard__Enabled: "false"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+data:
+  POSTGRES_DB: "sportsbook"
+  POSTGRES_USER: "sportsbook_user"
+  POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+data:
+  redis.conf: |
+    # Redis Configuration for Orleans Clustering
+    bind 0.0.0.0
+    port 6379
+    timeout 0
+    tcp-keepalive 300
+    
+    # Persistence configuration
+    appendonly yes
+    appendfsync everysec
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    
+    # Memory management
+    maxmemory-policy allkeys-lru
+    
+    # Security (password will be set via secret)
+    # requirepass will be set via mounted secret
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pulsar-config
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: pulsar
+    app.kubernetes.io/component: message-broker
+data:
+  # Pulsar standalone configuration
+  PULSAR_MEM: "-Xms2g -Xmx2g"
+  PULSAR_GC: "-XX:+UseG1GC -XX:MaxGCPauseMillis=20"
+  
+  # Pulsar broker configuration
+  broker.conf: |
+    # Broker settings
+    zookeeperServers=localhost:2181
+    configurationStoreServers=localhost:2181
+    
+    # Cluster settings
+    clusterName=standalone
+    
+    # Storage settings
+    managedLedgerDefaultEnsembleSize=1
+    managedLedgerDefaultWriteQuorum=1
+    managedLedgerDefaultAckQuorum=1
+    
+    # Resource limits
+    maxMessageSize=5242880
+    
+    # Authentication and authorization (disabled for simplicity)
+    authenticationEnabled=false
+    authorizationEnabled=false

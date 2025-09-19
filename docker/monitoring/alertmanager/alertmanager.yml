@@ -1,0 +1,136 @@
+global:
+  smtp_smarthost: 'smtp.example.com:587'
+  smtp_from: 'alerts@sportsbook.example.com'
+  smtp_auth_username: 'alerts@sportsbook.example.com'
+  smtp_auth_password: 'your-smtp-password'
+  slack_api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'default'
+  routes:
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 5s
+      group_interval: 5s
+      repeat_interval: 30m
+    - match:
+        service: orleans
+      receiver: 'orleans-alerts'
+    - match:
+        service: api
+      receiver: 'api-alerts'
+    - match:
+        service: postgres
+      receiver: 'database-alerts'
+    - match:
+        service: redis
+      receiver: 'cache-alerts'
+
+receivers:
+  - name: 'default'
+    email_configs:
+      - to: 'dev-team@sportsbook.example.com'
+        subject: 'Sportsbook Alert: {{ .GroupLabels.alertname }}'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Details:
+          {{ range .Labels.SortedPairs }} - {{ .Name }} = {{ .Value }}
+          {{ end }}
+          {{ end }}
+
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'oncall@sportsbook.example.com'
+        subject: 'CRITICAL: Sportsbook Alert - {{ .GroupLabels.alertname }}'
+        body: |
+          🚨 CRITICAL ALERT 🚨
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Severity: {{ .Labels.severity }}
+          Service: {{ .Labels.service }}
+          
+          Details:
+          {{ range .Labels.SortedPairs }} - {{ .Name }} = {{ .Value }}
+          {{ end }}
+          {{ end }}
+    slack_configs:
+      - channel: '#alerts-critical'
+        username: 'AlertManager'
+        title: 'Critical Alert: {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          🚨 {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          Service: {{ .Labels.service }}
+          {{ end }}
+        color: 'danger'
+
+  - name: 'orleans-alerts'
+    slack_configs:
+      - channel: '#orleans-alerts'
+        username: 'Orleans Monitor'
+        title: 'Orleans Alert: {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          ⚠️ {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          Silo: {{ .Labels.instance }}
+          {{ end }}
+        color: 'warning'
+
+  - name: 'api-alerts'
+    slack_configs:
+      - channel: '#api-alerts'
+        username: 'API Monitor'
+        title: 'API Alert: {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          🔌 {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          Instance: {{ .Labels.instance }}
+          {{ end }}
+        color: 'warning'
+
+  - name: 'database-alerts'
+    email_configs:
+      - to: 'dba@sportsbook.example.com'
+        subject: 'Database Alert: {{ .GroupLabels.alertname }}'
+        body: |
+          Database Alert Detected:
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Database: {{ .Labels.postgres_instance }}
+          {{ end }}
+    slack_configs:
+      - channel: '#database-alerts'
+        username: 'Database Monitor'
+        title: 'Database Alert: {{ .GroupLabels.alertname }}'
+        color: 'warning'
+
+  - name: 'cache-alerts'
+    slack_configs:
+      - channel: '#infrastructure-alerts'
+        username: 'Infrastructure Monitor'
+        title: 'Redis Alert: {{ .GroupLabels.alertname }}'
+        color: 'warning'
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']

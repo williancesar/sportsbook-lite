@@ -1,0 +1,204 @@
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pulsar
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: pulsar
+    app.kubernetes.io/component: message-broker
+    app.kubernetes.io/part-of: sportsbook-lite
+spec:
+  serviceName: pulsar-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pulsar
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pulsar
+        app.kubernetes.io/component: message-broker
+    spec:
+      securityContext:
+        fsGroup: 10000
+      containers:
+      - name: pulsar
+        image: apachepulsar/pulsar:3.3.0
+        imagePullPolicy: IfNotPresent
+        command: ["bin/pulsar", "standalone"]
+        ports:
+        - containerPort: 6650
+          name: pulsar
+        - containerPort: 8080
+          name: http-admin
+        env:
+        - name: PULSAR_MEM
+          valueFrom:
+            configMapKeyRef:
+              name: pulsar-config
+              key: PULSAR_MEM
+        - name: PULSAR_GC
+          valueFrom:
+            configMapKeyRef:
+              name: pulsar-config
+              key: PULSAR_GC
+        volumeMounts:
+        - name: pulsar-data
+          mountPath: /pulsar/data
+        - name: pulsar-config
+          mountPath: /pulsar/conf/broker.conf
+          subPath: broker.conf
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /admin/v2/brokers/health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /admin/v2/brokers/ready
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "3Gi"
+            cpu: "2"
+        securityContext:
+          runAsUser: 10000
+          runAsGroup: 10000
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+      volumes:
+      - name: pulsar-config
+        configMap:
+          name: pulsar-config
+  volumeClaimTemplates:
+  - metadata:
+      name: pulsar-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 20Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pulsar-service
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: pulsar
+    app.kubernetes.io/component: message-broker
+spec:
+  type: ClusterIP
+  ports:
+  - name: pulsar
+    port: 6650
+    targetPort: 6650
+    protocol: TCP
+  - name: http-admin
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: pulsar
+
+---
+# Headless service for StatefulSet
+apiVersion: v1
+kind: Service
+metadata:
+  name: pulsar-headless
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: pulsar
+    app.kubernetes.io/component: message-broker
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: pulsar
+    port: 6650
+    targetPort: 6650
+    protocol: TCP
+  - name: http-admin
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: pulsar
+
+---
+# Pulsar Manager Deployment (Optional - for development/staging)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pulsar-manager
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: pulsar-manager
+    app.kubernetes.io/component: management-ui
+    app.kubernetes.io/part-of: sportsbook-lite
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pulsar-manager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pulsar-manager
+        app.kubernetes.io/component: management-ui
+    spec:
+      containers:
+      - name: pulsar-manager
+        image: apachepulsar/pulsar-manager:v0.3.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 9527
+          name: http
+        env:
+        - name: SPRING_CONFIGURATION_FILE
+          value: /pulsar-manager/pulsar-manager/application.properties
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        securityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: false
+          allowPrivilegeEscalation: false
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pulsar-manager-service
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: pulsar-manager
+    app.kubernetes.io/component: management-ui
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 9527
+    targetPort: 9527
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: pulsar-manager

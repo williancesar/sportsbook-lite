@@ -1,0 +1,117 @@
+# Production environment Docker Compose configuration
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  postgres:
+    environment:
+      # Use stronger passwords in production (should be from secrets)
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+
+  redis:
+    command: redis-server --requirepass-file /run/secrets/redis_password --appendonly yes --save 60 1000
+    secrets:
+      - redis_password
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  pulsar:
+    environment:
+      # Production memory settings
+      - PULSAR_MEM="-Xms2g -Xmx2g"
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+
+  orleans-silo:
+    environment:
+      # Production environment settings
+      - ASPNETCORE_ENVIRONMENT=Production
+      - Logging__LogLevel__Default=Warning
+      - Logging__LogLevel__Orleans=Information
+      - Logging__LogLevel__SportsbookLite=Information
+      
+      # Use secrets for sensitive data
+      - ConnectionStrings__Database_FILE=/run/secrets/database_connection
+      - ConnectionStrings__Redis_FILE=/run/secrets/redis_connection
+      
+      # Orleans production settings
+      - Orleans__Dashboard__Enabled=false
+    secrets:
+      - database_connection
+      - redis_connection
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+
+  sportsbook-api:
+    environment:
+      # Production environment settings
+      - ASPNETCORE_ENVIRONMENT=Production
+      - Logging__LogLevel__Default=Warning
+      - Logging__LogLevel__Microsoft.AspNetCore=Information
+      - Swagger__Enabled=false
+      
+      # Use secrets for sensitive data
+      - ConnectionStrings__Database_FILE=/run/secrets/database_connection
+      - ConnectionStrings__Redis_FILE=/run/secrets/redis_connection
+    secrets:
+      - database_connection
+      - redis_connection
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+# Production secrets (should be managed externally)
+secrets:
+  postgres_password:
+    external: true
+  redis_password:
+    external: true
+  database_connection:
+    external: true
+  redis_connection:
+    external: true

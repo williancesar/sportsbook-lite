@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="9.2.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SportsbookLite.GrainInterfaces\SportsbookLite.GrainInterfaces.csproj" />
+    <ProjectReference Include="..\SportsbookLite.Contracts\SportsbookLite.Contracts.csproj" />
+    <ProjectReference Include="..\SportsbookLite.Infrastructure\SportsbookLite.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

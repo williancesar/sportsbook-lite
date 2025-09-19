@@ -1,0 +1,306 @@
+name: Security Analysis
+
+on:
+  schedule:
+    # Run security scans daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '9.0.x'
+
+jobs:
+  # Dependency vulnerability scanning
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Run vulnerability scan
+      run: |
+        dotnet list package --vulnerable --include-transitive --format json > vulnerability-report.json || true
+        
+        # Check if vulnerabilities were found
+        if jq -e '.projects[].frameworks[].vulnerabilities | length > 0' vulnerability-report.json > /dev/null; then
+          echo "::error::Security vulnerabilities found in dependencies"
+          jq '.projects[].frameworks[].vulnerabilities' vulnerability-report.json
+        else
+          echo "No security vulnerabilities found in dependencies"
+        fi
+
+    - name: Upload vulnerability report
+      uses: actions/upload-artifact@v4
+      with:
+        name: vulnerability-report
+        path: vulnerability-report.json
+        retention-days: 30
+
+  # SAST (Static Application Security Testing)
+  sast-analysis:
+    name: Static Security Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: csharp
+        queries: security-extended
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore and build
+      run: |
+        dotnet restore
+        dotnet build --no-restore --configuration Release
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:csharp"
+
+  # Container security scanning
+  container-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name != 'pull_request'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker images for scanning
+      run: |
+        docker build -t sportsbook-lite/orleans-silo:scan -f docker/Dockerfile --target orleans-runtime .
+        docker build -t sportsbook-lite/api:scan -f docker/Dockerfile --target api-runtime .
+
+    - name: Run Trivy vulnerability scanner - Orleans Silo
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'sportsbook-lite/orleans-silo:scan'
+        format: 'sarif'
+        output: 'orleans-silo-trivy.sarif'
+
+    - name: Run Trivy vulnerability scanner - API
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'sportsbook-lite/api:scan'
+        format: 'sarif'
+        output: 'api-trivy.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: '.'
+
+    - name: Run Hadolint Dockerfile scanner
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: docker/Dockerfile
+        format: sarif
+        output-file: hadolint-results.sarif
+        no-fail: true
+
+    - name: Upload Hadolint scan results
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: hadolint-results.sarif
+
+  # Secret scanning
+  secret-scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Run TruffleHog OSS
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified
+
+  # Infrastructure security scanning (Kubernetes manifests)
+  infrastructure-scan:
+    name: Infrastructure Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Checkov
+      id: checkov
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: .
+        framework: kubernetes
+        output_format: sarif
+        output_file_path: checkov-results.sarif
+        skip_check: CKV_K8S_43  # Skip image tag check for development
+
+    - name: Upload Checkov scan results
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: checkov-results.sarif
+
+    - name: Run Kubescore
+      run: |
+        wget https://github.com/zegl/kube-score/releases/download/v1.16.1/kube-score_1.16.1_linux_amd64.tar.gz
+        tar -xzf kube-score_1.16.1_linux_amd64.tar.gz
+        
+        ./kube-score score k8s/*.yaml \
+          --ignore-test pod-networkpolicy \
+          --ignore-test deployment-has-poddisruptionbudget \
+          --ignore-test container-security-context-privileged \
+          > kubescore-results.txt || true
+
+    - name: Upload Kubescore results
+      uses: actions/upload-artifact@v4
+      with:
+        name: kubescore-results
+        path: kubescore-results.txt
+        retention-days: 30
+
+  # License compliance checking
+  license-scan:
+    name: License Compliance Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Install license detection tool
+      run: dotnet tool install -g dotnet-project-licenses
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Generate license report
+      run: |
+        dotnet-project-licenses \
+          --input . \
+          --output-directory ./license-report \
+          --export-license-texts \
+          --json
+
+    - name: Upload license report
+      uses: actions/upload-artifact@v4
+      with:
+        name: license-report
+        path: license-report/
+        retention-days: 30
+
+  # Security policy compliance
+  compliance-check:
+    name: Security Policy Compliance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check security policy compliance
+      run: |
+        # Check for required security files
+        required_files=(
+          ".github/SECURITY.md"
+          "docker/.dockerignore" 
+          "k8s/secrets.yaml"
+        )
+        
+        missing_files=()
+        for file in "${required_files[@]}"; do
+          if [[ ! -f "$file" ]]; then
+            missing_files+=("$file")
+          fi
+        done
+        
+        if [[ ${#missing_files[@]} -gt 0 ]]; then
+          echo "::warning::Missing security policy files: ${missing_files[*]}"
+        fi
+        
+        # Check Dockerfile best practices
+        if grep -q "FROM.*:latest" docker/Dockerfile; then
+          echo "::warning::Dockerfile uses 'latest' tag which is not recommended for security"
+        fi
+        
+        # Check for hardcoded secrets in configs
+        if grep -r "password\|secret\|key" k8s/ --include="*.yaml" | grep -v "secretKeyRef\|valueFrom\|name.*secret"; then
+          echo "::error::Potential hardcoded secrets found in Kubernetes manifests"
+          exit 1
+        fi
+
+  # Generate security summary
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, sast-analysis, container-scan, secret-scan, infrastructure-scan, license-scan, compliance-check]
+    if: always()
+
+    steps:
+    - name: Generate security summary
+      run: |
+        echo "# Security Scan Summary" > security-summary.md
+        echo "" >> security-summary.md
+        echo "## Scan Results" >> security-summary.md
+        echo "" >> security-summary.md
+        echo "| Scan Type | Status |" >> security-summary.md
+        echo "|-----------|--------|" >> security-summary.md
+        echo "| Dependency Scan | ${{ needs.dependency-scan.result }} |" >> security-summary.md
+        echo "| SAST Analysis | ${{ needs.sast-analysis.result }} |" >> security-summary.md
+        echo "| Container Scan | ${{ needs.container-scan.result }} |" >> security-summary.md
+        echo "| Secret Scan | ${{ needs.secret-scan.result }} |" >> security-summary.md
+        echo "| Infrastructure Scan | ${{ needs.infrastructure-scan.result }} |" >> security-summary.md
+        echo "| License Scan | ${{ needs.license-scan.result }} |" >> security-summary.md
+        echo "| Compliance Check | ${{ needs.compliance-check.result }} |" >> security-summary.md
+        echo "" >> security-summary.md
+        echo "Generated on: $(date)" >> security-summary.md
+
+    - name: Upload security summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-summary
+        path: security-summary.md
+        retention-days: 30

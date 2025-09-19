@@ -1,0 +1,177 @@
+---
+# Ingress for SportsbookLite API
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sportsbook-ingress
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: sportsbook-ingress
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: sportsbook-lite
+  annotations:
+    # NGINX Ingress Controller annotations
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    
+    # Rate limiting
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Frame-Options "SAMEORIGIN" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+      add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'" always;
+    
+    # Load balancing
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+    
+    # Timeouts
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    
+    # Body size limit
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    
+    # CORS (if needed for browser clients)
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://sportsbook.example.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+    
+    # Certificate management (cert-manager)
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - api.sportsbook.example.com
+    secretName: sportsbook-api-tls
+  rules:
+  - host: api.sportsbook.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: sportsbook-api-service
+            port:
+              number: 80
+
+---
+# Ingress for Orleans Dashboard (Development/Staging only)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: orleans-dashboard-ingress
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: orleans-dashboard-ingress
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: sportsbook-lite
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    
+    # Basic auth for security (create secret with htpasswd)
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: orleans-dashboard-auth
+    nginx.ingress.kubernetes.io/auth-realm: 'Orleans Dashboard - Authentication Required'
+    
+    # IP whitelist (restrict to internal networks)
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - orleans-dashboard.sportsbook.example.com
+    secretName: orleans-dashboard-tls
+  rules:
+  - host: orleans-dashboard.sportsbook.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: orleans-gateway-service
+            port:
+              number: 30000
+
+---
+# Ingress for Pulsar Manager (Development/Staging only)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pulsar-manager-ingress
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: pulsar-manager-ingress
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: sportsbook-lite
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    
+    # Basic auth for security
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: pulsar-manager-auth
+    nginx.ingress.kubernetes.io/auth-realm: 'Pulsar Manager - Authentication Required'
+    
+    # IP whitelist (restrict to internal networks)
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - pulsar-manager.sportsbook.example.com
+    secretName: pulsar-manager-tls
+  rules:
+  - host: pulsar-manager.sportsbook.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: pulsar-manager-service
+            port:
+              number: 9527
+
+---
+# Basic Auth Secret for Orleans Dashboard (example)
+# Create with: htpasswd -c auth admin
+# kubectl create secret generic orleans-dashboard-auth --from-file=auth
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orleans-dashboard-auth
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: orleans-dashboard-auth
+    app.kubernetes.io/component: authentication
+type: Opaque
+data:
+  # admin:admin (change in production)
+  auth: YWRtaW46JGFwcjEkSDY1dnZkLiQvNUdzMExNaUpUOFA1WS5GMVZBSDBhMQ==
+
+---
+# Basic Auth Secret for Pulsar Manager (example)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pulsar-manager-auth
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: pulsar-manager-auth
+    app.kubernetes.io/component: authentication
+type: Opaque
+data:
+  # admin:admin (change in production)
+  auth: YWRtaW46JGFwcjEkSDY1dnZkLiQvNUdzMExNaUpUOFA1WS5GMVZBSDBhMQ==

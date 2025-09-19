@@ -1,0 +1,172 @@
+name: Deploy Monitoring Infrastructure
+
+on:
+  push:
+    paths:
+      - 'k8s/monitoring/**'
+      - 'docker/monitoring/**'
+      - '.github/workflows/monitoring-deployment.yml'
+    branches: [main, develop]
+  pull_request:
+    paths:
+      - 'k8s/monitoring/**'
+      - 'docker/monitoring/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  validate-configs:
+    name: Validate Monitoring Configurations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: '1.28.0'
+
+      - name: Validate Kubernetes manifests
+        run: |
+          # Validate all monitoring K8s manifests
+          for file in k8s/monitoring/*.yaml; do
+            echo "Validating $file"
+            kubectl --dry-run=client apply -f "$file"
+          done
+
+      - name: Setup Prometheus
+        run: |
+          wget https://github.com/prometheus/prometheus/releases/download/v2.48.0/prometheus-2.48.0.linux-amd64.tar.gz
+          tar xzf prometheus-2.48.0.linux-amd64.tar.gz
+          sudo mv prometheus-2.48.0.linux-amd64/promtool /usr/local/bin/
+
+      - name: Validate Prometheus config
+        run: |
+          promtool check config docker/monitoring/prometheus/prometheus.yml
+
+      - name: Validate Alert rules
+        run: |
+          promtool check rules docker/monitoring/prometheus/alerts/*.yml
+
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    needs: validate-configs
+    environment: development
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: '1.28.0'
+
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig --region us-west-2 --name sportsbook-dev
+
+      - name: Deploy monitoring namespace
+        run: |
+          kubectl apply -f k8s/monitoring/namespace.yaml
+
+      - name: Deploy monitoring infrastructure
+        run: |
+          # Apply configurations
+          kubectl apply -f k8s/monitoring/prometheus-config.yaml
+          kubectl apply -f k8s/monitoring/prometheus-deployment.yaml
+          kubectl apply -f k8s/monitoring/grafana-deployment.yaml
+          kubectl apply -f k8s/monitoring/alertmanager-deployment.yaml
+          kubectl apply -f k8s/monitoring/network-policies.yaml
+
+      - name: Wait for deployments
+        run: |
+          kubectl wait --for=condition=available --timeout=600s deployment/grafana -n monitoring
+          kubectl wait --for=condition=ready --timeout=600s pod -l app=prometheus -n monitoring
+          kubectl wait --for=condition=available --timeout=600s deployment/alertmanager -n monitoring
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n monitoring
+          kubectl get services -n monitoring
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: validate-configs
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: us-west-2
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: '1.28.0'
+
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig --region us-west-2 --name sportsbook-prod
+
+      - name: Deploy with blue-green strategy
+        run: |
+          # Create backup of current configuration
+          kubectl get configmap prometheus-config -n monitoring -o yaml > prometheus-config-backup.yaml
+          
+          # Deploy new configuration
+          kubectl apply -f k8s/monitoring/prometheus-config.yaml
+          
+          # Rolling update
+          kubectl rollout restart statefulset/prometheus -n monitoring
+          kubectl rollout restart deployment/grafana -n monitoring
+          kubectl rollout restart deployment/alertmanager -n monitoring
+          
+          # Wait and verify
+          kubectl rollout status statefulset/prometheus -n monitoring --timeout=600s
+          kubectl rollout status deployment/grafana -n monitoring --timeout=600s
+          kubectl rollout status deployment/alertmanager -n monitoring --timeout=600s
+
+      - name: Smoke tests
+        run: |
+          # Wait for services to be ready
+          sleep 60
+          
+          # Test Prometheus
+          kubectl port-forward -n monitoring svc/prometheus 9090:9090 &
+          sleep 10
+          curl -f http://localhost:9090/-/healthy || exit 1
+          
+          # Test Grafana
+          kubectl port-forward -n monitoring svc/grafana 3000:3000 &
+          sleep 10
+          curl -f http://localhost:3000/api/health || exit 1
+          
+          # Test AlertManager
+          kubectl port-forward -n monitoring svc/alertmanager 9093:9093 &
+          sleep 10
+          curl -f http://localhost:9093/-/healthy || exit 1
+
+      - name: Notification
+        if: success()
+        run: |
+          echo "Monitoring infrastructure deployed successfully to production"
+        # Add Slack notification here if needed

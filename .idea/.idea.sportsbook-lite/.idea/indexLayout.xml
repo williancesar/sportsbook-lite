@@ -6,8 +6,6 @@
       <Path>docs</Path>
       <Path>iac</Path>
       <Path>scripts</Path>
-      <Path>src</Path>
-      <Path>tests</Path>
     </attachedFolders>
     <explicitIncludes />
     <explicitExcludes />

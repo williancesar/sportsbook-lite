@@ -1,0 +1,290 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sportsbook-api
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: sportsbook-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: sportsbook-lite
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sportsbook-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sportsbook-api
+        app.kubernetes.io/component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: sportsbook-api
+        image: sportsbook-lite/api:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        # API Configuration
+        - name: ASPNETCORE_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: ASPNETCORE_ENVIRONMENT
+        - name: ASPNETCORE_URLS
+          value: "http://+:8080"
+        
+        # Orleans Client Configuration
+        - name: Orleans__ClusterId
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: ORLEANS_CLUSTER_ID
+        - name: Orleans__ServiceId
+          value: "sportsbook-api"
+        - name: Orleans__GatewayPort
+          value: "30000"
+        - name: Orleans__SiloAddress
+          value: "orleans-gateway-service"
+        
+        # Database Connection
+        - name: ConnectionStrings__Database
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: DATABASE_CONNECTION_STRING
+        - name: ConnectionStrings__Redis
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: REDIS_CONNECTION_STRING
+        
+        # Pulsar Configuration
+        - name: Pulsar__ServiceUrl
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: PULSAR_SERVICE_URL
+        - name: Pulsar__AdminUrl
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: PULSAR_ADMIN_URL
+        
+        # Logging Configuration
+        - name: Logging__LogLevel__Default
+          value: "Information"
+        - name: Logging__LogLevel__Microsoft.AspNetCore
+          value: "Warning"
+        - name: Logging__LogLevel__SportsbookLite
+          value: "Information"
+        
+        # CORS Configuration
+        - name: CORS__AllowCredentials
+          valueFrom:
+            configMapKeyRef:
+              name: sportsbook-config
+              key: CORS__AllowCredentials
+        
+        # Swagger Configuration (disabled in production)
+        - name: Swagger__Enabled
+          value: "false"
+        
+        # Security Configuration
+        - name: JWT__SigningKey
+          valueFrom:
+            secretKeyRef:
+              name: application-secrets
+              key: JWT_SIGNING_KEY
+        
+        # Pod-specific configuration
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        
+        volumeMounts:
+        - name: api-logs
+          mountPath: /app/logs
+        - name: tmp
+          mountPath: /tmp
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+          successThreshold: 1
+        
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        
+        startupProbe:
+          httpGet:
+            path: /health/startup
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6  # Allow up to 1 minute for startup
+          successThreshold: 1
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      
+      # Spread pods across nodes for better availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - sportsbook-api
+              topologyKey: kubernetes.io/hostname
+      
+      volumes:
+      - name: api-logs
+        emptyDir:
+          sizeLimit: 500Mi
+      - name: tmp
+        emptyDir:
+          sizeLimit: 100Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sportsbook-api-service
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: sportsbook-api
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: sportsbook-api
+
+---
+# Horizontal Pod Autoscaler for API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sportsbook-api-hpa
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: sportsbook-api
+    app.kubernetes.io/component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sportsbook-api
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 30
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      selectPolicy: Max
+
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sportsbook-api-pdb
+  namespace: sportsbook-lite
+  labels:
+    app.kubernetes.io/name: sportsbook-api
+    app.kubernetes.io/component: availability
+spec:
+  maxUnavailable: 50%
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sportsbook-api

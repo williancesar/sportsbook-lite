@@ -1,0 +1,33 @@
+# Docker Compose override file for different environments
+# This file is loaded automatically and can override docker-compose.yml settings
+
+services:
+  # Development overrides
+  orleans-silo:
+    environment:
+      # Enable detailed logging in development
+      - Logging__LogLevel__Orleans=Debug
+      - Logging__LogLevel__SportsbookLite=Debug
+      # Orleans Dashboard configuration
+      - Orleans__Dashboard__Enabled=true
+      - Orleans__Dashboard__Port=8080
+    # Mount source code for development (if using file watcher)
+    volumes:
+      - ../src:/app/src:ro
+      - orleans_logs:/app/logs
+
+  sportsbook-api:
+    environment:
+      # Enable detailed logging in development
+      - Logging__LogLevel__Default=Debug
+      - Logging__LogLevel__SportsbookLite=Debug
+      # Enable Swagger in development
+      - Swagger__Enabled=true
+    # Mount source code for development (if using file watcher)  
+    volumes:
+      - ../src:/app/src:ro
+      - api_logs:/app/logs
+
+volumes:
+  orleans_logs:
+  api_logs:

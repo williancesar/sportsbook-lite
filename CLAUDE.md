@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Sportsbook-Lite** is a technical interview project demonstrating senior-level expertise in distributed systems using Microsoft Orleans, Apache Pulsar, and event-driven architecture. The project showcases a backend-only sportsbook application built with modern .NET 8 technologies and follows enterprise-grade patterns.
+**Sportsbook-Lite** is a technical interview project demonstrating senior-level expertise in distributed systems using Microsoft Orleans, Apache Pulsar, and event-driven architecture. The project showcases a backend-only sportsbook application built with modern .NET 9 technologies and follows enterprise-grade patterns.
 
 ### Purpose
 - Demonstrate proficiency for Senior C# Developer position
@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Microsoft Orleans** - Virtual actor model for distributed applications
 - **Apache Pulsar** - Message streaming and event processing
 - **Event-Driven Architecture (EDA)** - Asynchronous messaging patterns
-- **.NET 8 / C# 12** - Latest LTS version with modern features
+- **.NET 9 / C# 13** - Latest version with modern features
 - **Docker & Kubernetes** - Containerization and orchestration
 - **FastEndpoints** - High-performance REST API framework
 
@@ -346,12 +346,12 @@ public class IntegrationTestBase : IAsyncLifetime
 ### Docker Configuration
 ```dockerfile
 # Multi-stage build for Orleans Silo
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 COPY . .
 RUN dotnet publish src/SportsbookLite.Host -c Release -o /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
+FROM mcr.microsoft.com/dotnet/aspnet:9.0
 WORKDIR /app
 COPY --from=build /app .
 EXPOSE 11111 30000
@@ -434,7 +434,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v3
       with:
-        dotnet-version: 8.0.x
+        dotnet-version: 9.0.x
     
     - name: Restore
       run: dotnet restore
@@ -566,11 +566,11 @@ When working with Claude Code, use these specialized agents for optimal results:
 
 ### Monitoring
 - Orleans Dashboard: `http://localhost:8080/dashboard`
-- Pulsar Manager: `http://localhost:9527`
+- Pulsar Manager: `http://localhost:8527`
 - Application Insights / Prometheus + Grafana
 
 ### Development Tools
 - Visual Studio 2022 / JetBrains Rider
 - Docker Desktop
-- Kubernetes Dashboard / k9s
+- Kubernetes Dashboard / k8s
 - Postman / Insomnia for API testing

@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sportsbook-lite
+  labels:
+    name: sportsbook-lite
+    app.kubernetes.io/name: sportsbook-lite
+    app.kubernetes.io/part-of: sportsbook-lite

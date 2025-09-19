@@ -1,0 +1,268 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "sportsbook-logs",
+    "title": "SportsbookLite - Logs Dashboard",
+    "tags": ["sportsbook", "logs", "loki"],
+    "timezone": "UTC",
+    "schemaVersion": 30,
+    "version": 1,
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Log Volume by Service",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(loki_ingester_samples_received_total[5m])) by (job)",
+            "legendFormat": "{{job}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "reqps",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 100},
+                {"color": "red", "value": 1000}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "options": {
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"],
+            "fields": ""
+          },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        }
+      },
+      {
+        "id": 2,
+        "title": "Error Rate by Level",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "sum(count_over_time({job=~\"orleans_silo|sportsbook_api\"} |= \"level\" [5m])) by (level)",
+            "legendFormat": "{{level}}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "options": {
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"],
+            "fields": ""
+          },
+          "pieType": "pie",
+          "tooltip": {"mode": "single"},
+          "legend": {"displayMode": "visible", "placement": "bottom"},
+          "displayLabels": ["name"]
+        }
+      },
+      {
+        "id": 3,
+        "title": "Orleans Silo Logs",
+        "type": "logs",
+        "targets": [
+          {
+            "expr": "{job=\"orleans_silo\"}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 12, "w": 24, "x": 0, "y": 8},
+        "options": {
+          "showTime": true,
+          "showLabels": true,
+          "showCommonLabels": false,
+          "wrapLogMessage": true,
+          "prettifyLogMessage": false,
+          "enableLogDetails": true,
+          "dedupStrategy": "none",
+          "sortOrder": "Descending"
+        }
+      },
+      {
+        "id": 4,
+        "title": "API Request Logs",
+        "type": "logs",
+        "targets": [
+          {
+            "expr": "{job=\"sportsbook_api\"} |= \"HTTP\"",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 12, "w": 24, "x": 0, "y": 20},
+        "options": {
+          "showTime": true,
+          "showLabels": true,
+          "showCommonLabels": false,
+          "wrapLogMessage": true,
+          "prettifyLogMessage": false,
+          "enableLogDetails": true,
+          "dedupStrategy": "none",
+          "sortOrder": "Descending"
+        }
+      },
+      {
+        "id": 5,
+        "title": "Error and Warning Logs",
+        "type": "logs",
+        "targets": [
+          {
+            "expr": "{job=~\"orleans_silo|sportsbook_api\"} |~ \"(?i)(error|warning|exception)\"",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 12, "w": 24, "x": 0, "y": 32},
+        "options": {
+          "showTime": true,
+          "showLabels": true,
+          "showCommonLabels": false,
+          "wrapLogMessage": true,
+          "prettifyLogMessage": false,
+          "enableLogDetails": true,
+          "dedupStrategy": "none",
+          "sortOrder": "Descending"
+        }
+      },
+      {
+        "id": 6,
+        "title": "Log Ingestion Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(loki_ingester_samples_received_total[5m])",
+            "legendFormat": "Ingestion Rate",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 44},
+        "yAxes": [
+          {
+            "label": "samples/sec",
+            "show": true
+          },
+          {
+            "show": true
+          }
+        ],
+        "xAxis": {
+          "show": true
+        },
+        "lines": true,
+        "fill": 1,
+        "linewidth": 2,
+        "points": false,
+        "pointradius": 2,
+        "bars": false,
+        "stack": false,
+        "percentage": false,
+        "legend": {
+          "avg": false,
+          "current": false,
+          "max": false,
+          "min": false,
+          "show": true,
+          "total": false,
+          "values": false
+        }
+      },
+      {
+        "id": 7,
+        "title": "Loki Storage Usage",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "loki_ingester_chunks_stored_total",
+            "legendFormat": "Stored Chunks",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "unit": "short",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 1000},
+                {"color": "red", "value": 5000}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 44},
+        "options": {
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"],
+            "fields": ""
+          },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        }
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "service",
+          "type": "query",
+          "query": "label_values(job)",
+          "current": {
+            "value": "All",
+            "text": "All"
+          },
+          "options": [],
+          "includeAll": true,
+          "multi": true,
+          "refresh": "on_dashboard_load"
+        },
+        {
+          "name": "level",
+          "type": "query", 
+          "query": "label_values(level)",
+          "current": {
+            "value": "All",
+            "text": "All"
+          },
+          "options": [],
+          "includeAll": true,
+          "multi": true,
+          "refresh": "on_dashboard_load"
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "name": "Deployments",
+          "datasource": "Loki",
+          "enable": true,
+          "expr": "{job=\"kubernetes-pods\"} |= \"deployment\"",
+          "textColumn": "",
+          "titleColumn": ""
+        }
+      ]
+    }
+  }
+}
