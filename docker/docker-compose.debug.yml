@@ -1,0 +1,92 @@
+# Docker Compose Debug Configuration
+# Use this file when debugging application services from your IDE
+#
+# Usage:
+#   Start infrastructure only: docker-compose -f docker-compose.yml up -d
+#   Or with this override: docker-compose -f docker-compose.yml -f docker-compose.debug.yml up -d
+#
+# This configuration:
+# - Disables the application services (orleans-silo, sportsbook-api)
+# - Exposes all necessary ports for local development
+# - Configures services for IDE debugging
+
+services:
+  # Override orleans-silo to not start (for IDE debugging)
+  orleans-silo:
+    # Deploy with 0 replicas effectively disables the service
+    deploy:
+      replicas: 0
+    # Alternative: use a dummy command that exits immediately
+    entrypoint: ["echo", "Orleans Silo disabled for debugging - run from IDE"]
+    # Remove health checks to prevent warnings
+    healthcheck:
+      disable: true
+
+  # Override sportsbook-api to not start (for IDE debugging)
+  sportsbook-api:
+    # Deploy with 0 replicas effectively disables the service
+    deploy:
+      replicas: 0
+    # Alternative: use a dummy command that exits immediately
+    entrypoint: ["echo", "API disabled for debugging - run from IDE"]
+    # Remove health checks to prevent warnings
+    healthcheck:
+      disable: true
+
+  # Ensure PostgreSQL is accessible for local development
+  postgres:
+    ports:
+      - "5432:5432"
+    environment:
+      # Allow connections from host machine
+      - POSTGRES_HOST_AUTH_METHOD=scram-sha-256
+      # Ensure the database accepts connections from any IP
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust
+
+  # Ensure Redis is accessible for local development
+  redis:
+    ports:
+      - "6379:6379"
+    # Bind to all interfaces for host access
+    command: redis-server --requirepass dev123 --appendonly yes --bind 0.0.0.0 --protected-mode no
+
+  # Ensure Pulsar is accessible for local development
+  pulsar:
+    ports:
+      - "6650:6650"  # Pulsar binary protocol
+      - "8080:8080"  # HTTP admin API
+    environment:
+      # Ensure Pulsar is accessible from host
+      - PULSAR_PREFIX_bindAddress=0.0.0.0
+      - PULSAR_PREFIX_advertisedAddress=localhost
+
+  # Loki remains accessible for log collection
+  loki:
+    ports:
+      - "3100:3100"
+
+  # Optional: Disable promtail if not collecting logs from containers
+  promtail:
+    profiles:
+      - with-logging
+    # Or keep it running but adjust configuration for local logs
+
+# Development-specific network configuration
+networks:
+  sportsbook-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+
+# Note: When running services from IDE, use these connection strings:
+#
+# PostgreSQL: Host=localhost;Port=5432;Database=sportsbook;Username=dev;Password=dev123;
+# Redis: localhost:6379,password=dev123,abortConnect=false
+# Pulsar: pulsar://localhost:6650
+# Loki: http://localhost:3100
+#
+# Orleans Clustering (in appsettings.Development.json):
+# - Use Redis for clustering with localhost:6379
+# - Configure silo endpoints for local development

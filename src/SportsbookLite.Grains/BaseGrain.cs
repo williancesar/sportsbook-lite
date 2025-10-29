@@ -1,8 +1,6 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Orleans;
-using Orleans.Runtime;
-using System.Diagnostics;
 
 namespace SportsbookLite.Grains;
 
@@ -11,7 +9,7 @@ namespace SportsbookLite.Grains;
 /// </summary>
 public abstract class BaseGrain : Grain
 {
-    protected ILogger Logger { get; private set; } = null!;
+    protected ILogger<BaseGrain> Logger { get; private set; } = null!;
     private readonly Stopwatch _lifetimeStopwatch = new();
     private DateTimeOffset _activatedAt;
     
@@ -20,8 +18,7 @@ public abstract class BaseGrain : Grain
         _activatedAt = DateTimeOffset.UtcNow;
         _lifetimeStopwatch.Start();
         
-        Logger = ServiceProvider.GetRequiredService<ILoggerFactory>()
-            .CreateLogger(GetType());
+        Logger = ServiceProvider.GetRequiredService<ILogger<BaseGrain>>();
         
         var grainId = this.GetPrimaryKeyString() ?? this.GetPrimaryKey().ToString();
         var grainType = GetType().Name;
@@ -35,7 +32,7 @@ public abstract class BaseGrain : Grain
             ["ActivatedAt"] = _activatedAt
         }))
         {
-            Logger.LogInformation("Grain activated: {GrainType} with ID {GrainId}", 
+            Logger.LogInformation("Grain activated: {GrainType} with ID {GrainId}",
                 grainType, grainId);
         }
         
@@ -50,9 +47,9 @@ public abstract class BaseGrain : Grain
         var grainType = GetType().Name;
         
         Logger.LogInformation(
-            "Grain deactivating: {GrainType} with ID {GrainId} after {LifetimeMs}ms. Reason: {DeactivationReason}", 
-            grainType, 
-            grainId, 
+            "Grain deactivating: {GrainType} with ID {GrainId} after {LifetimeMs}ms. Reason: {DeactivationReason}",
+            grainType,
+            grainId,
             _lifetimeStopwatch.ElapsedMilliseconds,
             reason);
         

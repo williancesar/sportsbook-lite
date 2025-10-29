@@ -246,6 +246,117 @@ dotnet run --project src/SportsbookLite.Host
 dotnet run --project src/SportsbookLite.Api
 ```
 
+### 🔧 Flexible Docker Compose Usage
+
+The Docker Compose setup supports multiple configurations for different development scenarios:
+
+#### **Option 1: Run Everything in Containers** (Default Full Stack)
+```bash
+# Start all services including application
+docker-compose --profile full up -d
+
+# Or use the shorthand for all profiles
+docker-compose --profile full --profile monitoring --profile management up -d
+```
+
+#### **Option 2: Run Only Infrastructure** (For IDE Debugging)
+```bash
+# Start only infrastructure services (PostgreSQL, Redis, Pulsar, Loki)
+# Application services (orleans-silo, sportsbook-api) won't start
+docker-compose up -d
+
+# Then run Orleans Silo and API from your IDE with these connection strings:
+# PostgreSQL: Host=localhost;Port=5432;Database=sportsbook;Username=dev;Password=dev123;
+# Redis: localhost:6379,password=dev123,abortConnect=false
+# Pulsar: pulsar://localhost:6650
+```
+
+#### **Option 3: Use Debug Override** (Enhanced IDE Debugging)
+```bash
+# Use the debug configuration for better IDE integration
+docker-compose -f docker/docker-compose.yml -f docker/docker-compose.debug.yml up -d
+
+# This configuration:
+# - Disables application services
+# - Optimizes port bindings for host access
+# - Configures services for external connections
+```
+
+#### **Option 4: Start Specific Services Only**
+```bash
+# Start only the services you need
+docker-compose up postgres redis -d
+
+# Start infrastructure without monitoring
+docker-compose up postgres redis pulsar -d
+
+# Add monitoring stack
+docker-compose --profile monitoring up -d
+```
+
+#### **Option 5: Development with Hot Reload**
+```bash
+# Use override file for development settings
+docker-compose -f docker/docker-compose.yml -f docker/docker-compose.override.yml up -d
+
+# This enables debug logging and mounts source code
+```
+
+### 📋 Docker Compose Profiles
+
+| Profile | Services | Usage |
+|---------|----------|-------|
+| `(default)` | PostgreSQL, Redis, Pulsar, Loki, Promtail | Basic infrastructure |
+| `full` | + Orleans Silo, API | Complete application stack |
+| `monitoring` | + Prometheus, Grafana | Metrics and dashboards |
+| `management` | + Adminer, Redis Commander, Pulsar Manager | Admin UIs |
+
+### 🛠️ Common Development Scenarios
+
+#### **Debugging Orleans Grains in IDE**
+```bash
+# 1. Start infrastructure only
+cd docker
+docker-compose up -d
+
+# 2. Configure your IDE launch settings:
+# - Set ASPNETCORE_ENVIRONMENT=Development
+# - Use localhost for all service connections
+# - Set breakpoints in grain code
+
+# 3. Run Orleans Host from IDE (F5 in Visual Studio)
+# 4. Run API project from IDE in another debug session
+```
+
+#### **Testing with Fresh Database**
+```bash
+# Stop and remove all containers and volumes
+docker-compose down -v
+
+# Start fresh
+docker-compose --profile full up -d
+```
+
+#### **Monitoring Performance**
+```bash
+# Start everything with monitoring
+docker-compose --profile full --profile monitoring up -d
+
+# Access Grafana at http://localhost:3000 (admin/admin123)
+```
+
+#### **Viewing Logs**
+```bash
+# View logs for specific service
+docker-compose logs -f orleans-silo
+
+# View all logs
+docker-compose logs -f
+
+# View logs with timestamps
+docker-compose logs -f -t
+```
+
 ### Service URLs
 
 | Service | URL | Description |

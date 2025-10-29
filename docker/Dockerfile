@@ -42,6 +42,10 @@ RUN dotnet publish src/SportsbookLite.Api --configuration Release --no-build --o
 # Stage 2: Orleans Silo runtime image
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS orleans-runtime
 
+# Install wget for health checks (adds ~5MB)
+RUN apt-get update && apt-get install -y --no-install-recommends wget && \
+    rm -rf /var/lib/apt/lists/*
+
 # Create non-root user for security
 RUN groupadd -r orleans && useradd -r -g orleans orleans
 
@@ -63,14 +67,17 @@ USER orleans
 # 30000 - Gateway port for clients
 EXPOSE 11111 30000
 
-# Health check for Orleans Silo
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD curl -f http://localhost:30000/health || exit 1
+# Health check is managed by docker-compose.yml
+# Removed built-in health check to avoid conflicts
 
 ENTRYPOINT ["dotnet", "SportsbookLite.Host.dll"]
 
 # Stage 3: API runtime image
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS api-runtime
+
+# Install wget for health checks (adds ~5MB)
+RUN apt-get update && apt-get install -y --no-install-recommends wget && \
+    rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
 RUN groupadd -r apiuser && useradd -r -g apiuser apiuser
@@ -91,9 +98,8 @@ USER apiuser
 # Expose API port
 EXPOSE 8080
 
-# Health check for API
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:8080/health || exit 1
+# Health check is managed by docker-compose.yml
+# Removed built-in health check to avoid conflicts
 
 ENTRYPOINT ["dotnet", "SportsbookLite.Api.dll"]
 

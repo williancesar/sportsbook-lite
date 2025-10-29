@@ -40,11 +40,53 @@ try
         .UseOrleans((context, siloBuilder) =>
         {
             var environment = context.HostingEnvironment.EnvironmentName;
-            var isDevelopment = environment == Environments.Development;
+            var isDocker = Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true" ||
+                           !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ORLEANS_CLUSTER_ID"));
 
-            // Configure clustering
-            if (isDevelopment)
+            // Get Redis connection string based on execution context
+            var redisHost = isDocker ? "redis" : "localhost";
+            var redisPassword = context.Configuration["REDIS_PASSWORD"] ??
+                               Environment.GetEnvironmentVariable("REDIS_PASSWORD") ??
+                               "dev123";
+            var redisConnection = $"{redisHost}:6379,password={redisPassword},abortConnect=false";
+
+            // Check if Redis clustering should be used (default to true)
+            var useRedisClustering = context.Configuration["USE_REDIS_CLUSTERING"] != "false" &&
+                                    Environment.GetEnvironmentVariable("USE_REDIS_CLUSTERING") != "false";
+
+            if (useRedisClustering)
             {
+                try
+                {
+                    // Use Redis clustering for all environments
+                    Log.Information("Configuring Orleans with Redis clustering at {RedisHost}", redisHost);
+                    siloBuilder.UseRedisClustering(redisConnection)
+                        .Configure<ClusterOptions>(options =>
+                        {
+                            options.ClusterId = context.Configuration["Orleans:ClusterId"] ??
+                                              Environment.GetEnvironmentVariable("ORLEANS_CLUSTER_ID") ??
+                                              "sportsbook-dev";
+                            options.ServiceId = context.Configuration["Orleans:ServiceId"] ??
+                                              Environment.GetEnvironmentVariable("ORLEANS_SERVICE_ID") ??
+                                              "sportsbook-silo";
+                        });
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to configure Redis clustering, falling back to localhost clustering");
+                    // Fallback to localhost clustering if Redis is not available
+                    siloBuilder.UseLocalhostClustering()
+                        .Configure<ClusterOptions>(options =>
+                        {
+                            options.ClusterId = "sportsbook-dev";
+                            options.ServiceId = "sportsbook-silo";
+                        });
+                }
+            }
+            else
+            {
+                // Use localhost clustering if explicitly disabled
+                Log.Information("Using localhost clustering (Redis clustering disabled)");
                 siloBuilder.UseLocalhostClustering()
                     .Configure<ClusterOptions>(options =>
                     {
@@ -52,28 +94,17 @@ try
                         options.ServiceId = "sportsbook-silo";
                     });
             }
-            else
-            {
-                // Production: Use Redis clustering
-                var redisConnection = context.Configuration["ConnectionStrings:Redis"] ?? "localhost:6379";
-                siloBuilder.UseRedisClustering(redisConnection)
-                .Configure<ClusterOptions>(options =>
-                {
-                    options.ClusterId = context.Configuration["Orleans:ClusterId"] ?? "sportsbook-prod";
-                    options.ServiceId = context.Configuration["Orleans:ServiceId"] ?? "sportsbook-silo";
-                });
-            }
 
-            // Configure endpoints
+            // Configure endpoints - listen on all addresses when in Docker
             siloBuilder.ConfigureEndpoints(
                 siloPort: 11111,
                 gatewayPort: 30000,
-                listenOnAnyHostAddress: !isDevelopment);
+                listenOnAnyHostAddress: isDocker);
 
-            // Configure storage
-            var connectionString = context.Configuration["ConnectionStrings:Database"] ?? 
+            // Configure storage - use PostgreSQL for all environments since it's available
+            var connectionString = context.Configuration["ConnectionStrings:Database"] ??
                 "Host=localhost;Database=sportsbook;Username=dev;Password=dev123";
-            
+
             siloBuilder.AddAdoNetGrainStorage("Default", options =>
             {
                 options.ConnectionString = connectionString;
@@ -95,12 +126,6 @@ try
             // Orleans Dashboard not available for Orleans 9.x yet
 
             // Configure telemetry - will be added in future Orleans versions
-
-            // Add memory grain storage for development
-            if (isDevelopment)
-            {
-                siloBuilder.AddMemoryGrainStorageAsDefault();
-            }
         })
         .ConfigureServices((context, services) =>
         {

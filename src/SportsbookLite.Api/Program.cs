@@ -46,39 +46,62 @@ builder.Services
         o.ShortSchemaNames = true;
     });
 
-// Configure Orleans Client
+// Configure Orleans Client with non-blocking startup
 builder.Host.UseOrleansClient((context, client) =>
 {
-    var isDevelopment = context.HostingEnvironment.IsDevelopment();
     var isDocker = Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true" ||
                    Environment.GetEnvironmentVariable("DOCKER_CONTAINER") == "true";
 
-    if (isDevelopment)
-    {
-        // Determine Orleans silo endpoint based on environment
-        var orleansHost = isDocker ? "orleans-silo" : "localhost";
-        var orleansEndpoint = new IPEndPoint(
-            IPAddress.TryParse(orleansHost, out var ip) ? ip : Dns.GetHostAddresses(orleansHost)[0],
-            30000);
+    // Get Redis connection string based on execution context
+    var redisHost = isDocker ? "redis" : "localhost";
+    var redisPassword = context.Configuration["REDIS_PASSWORD"] ??
+                       Environment.GetEnvironmentVariable("REDIS_PASSWORD") ??
+                       "dev123";
+    var redisConnection = $"{redisHost}:6379,password={redisPassword},abortConnect=false";
 
-        // For development, connect to silo using static clustering
-        client.UseStaticClustering(orleansEndpoint)
-              .Configure<ClusterOptions>(options =>
-              {
-                  options.ClusterId = context.Configuration["Orleans:ClusterId"] ?? "sportsbook-dev";
-                  options.ServiceId = context.Configuration["Orleans:ServiceId"] ?? "sportsbook-api";
-              });
+    // Check if Redis clustering should be used (default to true)
+    var useRedisClustering = context.Configuration["USE_REDIS_CLUSTERING"] != "false" &&
+                            Environment.GetEnvironmentVariable("USE_REDIS_CLUSTERING") != "false";
+
+    if (useRedisClustering)
+    {
+        try
+        {
+            // Use Redis clustering for all environments
+            Log.Information("Connecting to Orleans using Redis clustering at {RedisHost}", redisHost);
+            client.UseRedisClustering(redisConnection)
+                  .Configure<ClusterOptions>(options =>
+                  {
+                      options.ClusterId = context.Configuration["Orleans:ClusterId"] ??
+                                        Environment.GetEnvironmentVariable("ORLEANS_CLUSTER_ID") ??
+                                        "sportsbook-dev";
+                      options.ServiceId = context.Configuration["Orleans:ServiceId"] ??
+                                        Environment.GetEnvironmentVariable("ORLEANS_SERVICE_ID") ??
+                                        "sportsbook-api";
+                  });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to configure Redis clustering, falling back to localhost clustering");
+            // Fallback to localhost clustering if Redis is not available
+            client.UseLocalhostClustering(gatewayPort: 30000)
+                  .Configure<ClusterOptions>(options =>
+                  {
+                      options.ClusterId = "sportsbook-dev";
+                      options.ServiceId = "sportsbook-api";
+                  });
+        }
     }
     else
     {
-        // Production: Use Redis clustering
-        var redisConnection = context.Configuration["ConnectionStrings:Redis"] ?? "localhost:6379";
-        client.UseRedisClustering(redisConnection)
-        .Configure<ClusterOptions>(options =>
-        {
-            options.ClusterId = context.Configuration["Orleans:ClusterId"] ?? "sportsbook-prod";
-            options.ServiceId = context.Configuration["Orleans:ServiceId"] ?? "sportsbook-api";
-        });
+        // Use localhost clustering if explicitly disabled
+        Log.Information("Using localhost clustering (Redis clustering disabled)");
+        client.UseLocalhostClustering(gatewayPort: 30000)
+              .Configure<ClusterOptions>(options =>
+              {
+                  options.ClusterId = "sportsbook-dev";
+                  options.ServiceId = "sportsbook-api";
+              });
     }
 });
 
